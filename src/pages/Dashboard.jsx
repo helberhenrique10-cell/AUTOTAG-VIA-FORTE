@@ -305,38 +305,45 @@ export default function Dashboard() {
 
   const handleSendManualPDF = async () => {
     if (!reportEmail) {
-      alert("Por favor, digite um e-mail válido!");
+      alert("Por favor, insira um e-mail válido!");
       return;
     }
+
     setIsSending(true);
+
     try {
-      const element = document.getElementById("report-content");
-      const filename = `Relatorio_Status_${currentLoco.id}.pdf`;
+      // 1. Elemento do relatório para converter em PDF
+      const element = document.getElementById("report-content") || document.body;
+
+      // 2. Configurações de exportação do PDF
       const opt = {
         margin: 10,
-        filename: filename,
+        filename: `Relatorio_Status_${currentLoco.id}_${new Date().toISOString().slice(0, 10)}.pdf`,
         image: { type: "jpeg", quality: 0.98 },
-        html2canvas: { scale: 2 },
+        html2canvas: { scale: 2, useCORS: true, logging: false },
         jsPDF: { unit: "mm", format: "a4", orientation: "portrait" }
       };
 
+      // 3. Geração e download imediato do ficheiro PDF
       await html2pdf().set(opt).from(element).save();
 
+      // 4. Abertura do cliente de e-mail com dados pré-preenchidos
       const subject = encodeURIComponent(`Relatório de Status - ${currentLoco.name}`);
       const body = encodeURIComponent(
-        `Olá,\n\nSegue em anexo o relatório da ${currentLoco.name}.\n\n` +
-        `• Odômetro: ${currentLoco.odometer} km\n` +
-        `• Componentes: ${components.length}\n` +
-        `• Status: 100% Operacional\n\n` +
+        `Olá,\n\nSegue o relatório atualizado da ${currentLoco.name}.\n\n` +
+        `• Odômetro: ${currentLoco.odometer.toLocaleString("pt-BR")} km\n` +
+        `• Componentes Ativos: ${components.length}\n` +
+        `• Status do Ativo: ${currentLoco.status}\n\n` +
+        `O ficheiro PDF do relatório foi gerado e descarregado para o seu dispositivo. Anexe-o a esta mensagem para concluir o envio.\n\n` +
         `Atenciosamente,\nSistema ViaForte`
       );
 
       window.location.href = `mailto:${reportEmail}?subject=${subject}&body=${body}`;
 
-      alert("✅ PDF baixado com sucesso! Anexe o arquivo na janela de e-mail aberta.");
+      alert(`✅ PDF gerado com sucesso!\n\nFoi efetuado o download do ficheiro no seu dispositivo e aberto o seu cliente de e-mail preenchido para: ${reportEmail}`);
     } catch (error) {
-      console.error("Erro ao gerar PDF:", error);
-      alert("⚠️ Erro ao gerar o PDF.");
+      console.error("Erro ao gerar/enviar PDF:", error);
+      alert("⚠️ Ocorreu um erro ao gerar o PDF. Verifique se o módulo html2pdf.js está devidamente carregado.");
     } finally {
       setIsSending(false);
     }

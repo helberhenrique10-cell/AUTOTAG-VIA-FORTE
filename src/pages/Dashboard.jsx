@@ -186,6 +186,14 @@ export default function Dashboard() {
     team: "Manhã"
   });
 
+  // Form de Nova Ordem de Serviço
+  const [newOsData, setNewOsData] = useState({
+    component: "Injetor de combustível",
+    type: "Inspeção Preventiva",
+    responsible: "Sem responsável - Atribuição Pendente",
+    priority: "Prioridade Alta"
+  });
+
   // Odômetro
   const [odometerInput, setOdometerInput] = useState(currentLoco.odometer.toString());
 
@@ -268,6 +276,25 @@ export default function Dashboard() {
     setTeamMembers([...teamMembers, newMember]);
     setShowNovoTecnicoModal(false);
     setNewTecnicoData({ name: "", role: "", spec: "", matricula: "", phone: "", team: "Manhã" });
+  };
+
+  const handleCriarNovaOS = () => {
+    const now = new Date();
+    const dateFormatted = `${now.toLocaleDateString("pt-BR")} ${now.toLocaleTimeString("pt-BR", { hour: '2-digit', minute: '2-digit' })}`;
+
+    const newOS = {
+      id: `OS-${Math.floor(100000 + Math.random() * 900000)}`,
+      date: dateFormatted,
+      type: `${newOsData.type} - ${newOsData.component}`,
+      details: `Manutenção solicitada para o componente ${newOsData.component}.`,
+      responsible: newOsData.responsible,
+      priority: newOsData.priority,
+      status: "Aberta"
+    };
+
+    setOrders([newOS, ...orders]);
+    setShowNovaOsModal(false);
+    alert(`✅ Ordem de serviço ${newOS.id} gerada com sucesso!`);
   };
 
   const handleUpdateOdometer = () => {
@@ -1328,31 +1355,79 @@ export default function Dashboard() {
       {/* MODAL 4: NOVA O.S. */}
       {showNovaOsModal && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#0f172a] border border-slate-800 rounded-2xl w-full max-w-md p-6 space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h3 className="font-black text-white text-base">Abrir Nova Ordem de Serviço</h3>
-              <button onClick={() => setShowNovaOsModal(false)} className="text-slate-400 hover:text-white">
+          <div className="bg-[#0f172a] border border-slate-800/90 rounded-2xl w-full max-w-lg p-6 space-y-5 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800/80 pb-4">
+              <h3 className="font-black text-white text-lg">Abrir Nova Ordem de Serviço</h3>
+              <button
+                onClick={() => setShowNovaOsModal(false)}
+                className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800"
+              >
                 <X className="w-6 h-6" />
               </button>
             </div>
-            <div className="space-y-3 text-sm">
+
+            <div className="space-y-4 text-xs font-bold">
               <div>
-                <label className="block text-slate-300 font-bold mb-1">Componente Alvo</label>
-                <select className="w-full bg-[#0b111e] border border-slate-800 rounded-xl p-3 text-slate-200 font-medium">
-                  {components.map((c) => (
-                    <option key={c.id} value={c.name}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
+                <label className="block text-slate-300 mb-1.5">Componente Alvo</label>
+                <div className="relative">
+                  <select
+                    value={newOsData.component}
+                    onChange={(e) => setNewOsData({ ...newOsData, component: e.target.value })}
+                    className="w-full bg-[#0b111e] border border-slate-800 rounded-xl p-3.5 text-slate-200 text-sm font-semibold appearance-none focus:outline-none focus:border-emerald-500 cursor-pointer"
+                  >
+                    {components.map((c) => (
+                      <option key={c.id} value={c.name}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3.5 top-4 pointer-events-none" />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-300 mb-1.5">Tipo de Serviço</label>
+                <input
+                  type="text"
+                  value={newOsData.type}
+                  onChange={(e) => setNewOsData({ ...newOsData, type: e.target.value })}
+                  placeholder="Ex: Substituição, Inspeção Preventiva"
+                  className="w-full bg-[#0b111e] border border-slate-800 rounded-xl p-3.5 text-white text-sm font-semibold focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-slate-300 mb-1.5">Prioridade</label>
+                  <div className="relative">
+                    <select
+                      value={newOsData.priority}
+                      onChange={(e) => setNewOsData({ ...newOsData, priority: e.target.value })}
+                      className="w-full bg-[#0b111e] border border-slate-800 rounded-xl p-3.5 text-slate-200 text-sm font-semibold appearance-none focus:outline-none focus:border-emerald-500 cursor-pointer"
+                    >
+                      <option value="Prioridade Alta">Prioridade Alta</option>
+                      <option value="Prioridade Média">Prioridade Média</option>
+                      <option value="Prioridade Baixa">Prioridade Baixa</option>
+                    </select>
+                    <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3.5 top-4 pointer-events-none" />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 mb-1.5">Responsável</label>
+                  <input
+                    type="text"
+                    value={newOsData.responsible}
+                    onChange={(e) => setNewOsData({ ...newOsData, responsible: e.target.value })}
+                    className="w-full bg-[#0b111e] border border-slate-800 rounded-xl p-3.5 text-white text-sm font-semibold focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
               </div>
             </div>
+
             <button
-              onClick={() => {
-                alert("Ordem de serviço gerada!");
-                setShowNovaOsModal(false);
-              }}
-              className="w-full bg-emerald-500 text-slate-950 font-extrabold py-3 rounded-xl text-sm"
+              onClick={handleCriarNovaOS}
+              className="w-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold py-3.5 rounded-xl text-sm transition shadow-lg shadow-emerald-500/10 mt-2"
             >
               Criar O.S.
             </button>

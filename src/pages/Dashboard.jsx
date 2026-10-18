@@ -996,7 +996,9 @@ export default function Dashboard() {
                           <td className="p-4 font-bold text-white text-base">{c.name}</td>
                           <td className="p-4 font-mono text-emerald-400 font-bold">{c.rfid}</td>
                           <td className="p-4 font-mono text-slate-300">{c.protheusCode}</td>
-                          <td className="p-4 font-bold text-slate-100">{Number(c.wear_km || c.km_instalacao || 0).toLocaleString("pt-BR")} km</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-slate-200">
+                            {Number(c.kmSinceInstall || c.km_since_install || c.wear_km || 0).toLocaleString('pt-BR')} km
+                          </td>
                           <td className="p-4">
                             <span className="font-extrabold text-slate-200 text-base">{c.remainingLife}%</span>
                           </td>

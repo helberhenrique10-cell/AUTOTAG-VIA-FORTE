@@ -337,6 +337,11 @@ export default function Dashboard() {
   };
 
   const handleSendManualPDF = async () => {
+    if (!reportEmail) {
+      alert("Selecione um destinatário cadastrado antes de enviar o relatório.");
+      return;
+    }
+
     setIsSending(true);
 
     try {
@@ -450,11 +455,42 @@ export default function Dashboard() {
         { title: "Estado", width: 31, value: (order) => order.status }
       ], orders);
 
-      pdf.save(filename);
-      alert(`✅ PDF descarregado como ${filename}. O envio por email requer um serviço de email configurado.`);
+      const pdfBlob = pdf.output("blob");
+      const pdfBase64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(",")[1]);
+        reader.onerror = () => reject(reader.error || new Error("Não foi possível ler o PDF gerado."));
+        reader.readAsDataURL(pdfBlob);
+      });
+
+      const response = await fetch("/api/send-pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to: reportEmail,
+          pdfBase64,
+          filename,
+          locomotiveName: currentLoco.name,
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(result.error || "O servidor não conseguiu enviar o relatório.");
+      }
+
+      const downloadUrl = URL.createObjectURL(pdfBlob);
+      const downloadLink = document.createElement("a");
+      downloadLink.href = downloadUrl;
+      downloadLink.download = filename;
+      document.body.appendChild(downloadLink);
+      downloadLink.click();
+      downloadLink.remove();
+      window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+
+      alert(`✅ Relatório enviado para ${reportEmail} e descarregado como ${filename}.`);
     } catch (error) {
       console.error("Erro ao gerar/descarregar PDF:", error);
-      alert(`⚠️ Não foi possível gerar o PDF: ${error.message || "erro inesperado"}`);
+      alert(`⚠️ Não foi possível enviar/descarregar o relatório: ${error.message || "erro inesperado"}`);
     } finally {
       setIsSending(false);
     }
@@ -1107,7 +1143,7 @@ export default function Dashboard() {
                         className="w-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold py-3.5 px-5 rounded-xl text-sm transition flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-500/10 disabled:opacity-50"
                       >
                         {isSending ? <Loader2 className="w-5 h-5 animate-spin" /> : <Mail className="w-5 h-5" />}
-                        {isSending ? "Gerando PDF..." : "Descarregar PDF"}
+                        {isSending ? "Enviando relatório..." : "Enviar e descarregar PDF"}
                       </button>
                     </div>
                   </div>
@@ -1147,7 +1183,7 @@ export default function Dashboard() {
 
                   <p className="text-xs text-slate-300 flex items-center gap-2 font-medium">
                     <Clock className="w-4 h-4 text-slate-400" />
-                    Gera e descarrega um PDF com o status, consumo de vida útil e previsão de troca dos componentes.
+                    Gera o PDF do relatório, envia-o ao destinatário selecionado e inicia o download.
                   </p>
 
                   <div className="border-t border-slate-800/80 pt-5 mt-5">

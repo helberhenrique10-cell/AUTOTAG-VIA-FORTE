@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { jsPDF } from "jspdf";
+import { supabase } from "@/lib/supabaseClient";
 import {
   Train,
   LayoutDashboard,
@@ -155,6 +156,40 @@ export default function Dashboard() {
   const [autoFrequency, setAutoFrequency] = useState("Semanal");
   const [scheduledReports, setScheduledReports] = useState([]);
   const [isSending, setIsSending] = useState(false);
+  const [emailRecipients, setEmailRecipients] = useState([]);
+  const [recipientName, setRecipientName] = useState("");
+  const [recipientEmail, setRecipientEmail] = useState("");
+  const [isSavingRecipient, setIsSavingRecipient] = useState(false);
+  const [recipientError, setRecipientError] = useState(() =>
+    supabase ? "" : "Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY para carregar os destinatários."
+  );
+  const [recipientSuccess, setRecipientSuccess] = useState("");
+
+  useEffect(() => {
+    if (!supabase) return undefined;
+
+    let isActive = true;
+    const loadRecipients = async () => {
+      try {
+        const { data, error } = await supabase
+          .from("email_recipients")
+          .select("id, name, email")
+          .order("name");
+
+        if (error) throw error;
+        if (isActive) setEmailRecipients(data || []);
+      } catch (error) {
+        if (!isActive) return;
+        console.error("Erro ao carregar destinatários:", error);
+        setRecipientError(`Não foi possível carregar os destinatários: ${error.message || "erro de conexão"}`);
+      }
+    };
+
+    loadRecipients();
+    return () => {
+      isActive = false;
+    };
+  }, []);
 
   // Form de Vincular Componente
   const [newCompData, setNewCompData] = useState({
@@ -422,6 +457,49 @@ export default function Dashboard() {
       alert(`⚠️ Não foi possível gerar o PDF: ${error.message || "erro inesperado"}`);
     } finally {
       setIsSending(false);
+    }
+  };
+
+  const handleRegisterRecipient = async (event) => {
+    event.preventDefault();
+    setRecipientError("");
+    setRecipientSuccess("");
+
+    const name = recipientName.trim();
+    const email = recipientEmail.trim().toLowerCase();
+    if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setRecipientError("Informe um nome e um endereço de email válido.");
+      return;
+    }
+    if (!supabase) {
+      setRecipientError("Supabase não configurado. Defina as variáveis de conexão para cadastrar destinatários.");
+      return;
+    }
+    if (emailRecipients.some((recipient) => String(recipient.email || "").toLowerCase() === email)) {
+      setRecipientError("Este endereço já está cadastrado.");
+      return;
+    }
+
+    setIsSavingRecipient(true);
+    try {
+      const { data, error } = await supabase
+        .from("email_recipients")
+        .insert({ name, email })
+        .select("id, name, email")
+        .single();
+
+      if (error) throw error;
+
+      setEmailRecipients((current) => [...current, data].sort((a, b) => a.name.localeCompare(b.name)));
+      setReportEmail(data.email);
+      setRecipientName("");
+      setRecipientEmail("");
+      setRecipientSuccess(`${data.name} foi cadastrado e selecionado como destinatário.`);
+    } catch (error) {
+      console.error("Erro ao cadastrar destinatário:", error);
+      setRecipientError(`Não foi possível cadastrar o email: ${error.message}`);
+    } finally {
+      setIsSavingRecipient(false);
     }
   };
 
@@ -1007,14 +1085,19 @@ export default function Dashboard() {
                 <div className="p-6 space-y-6">
                   <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-end">
                     <div className="lg:col-span-2">
-                      <label className="block text-xs font-bold text-slate-300 mb-2">Email para agendamento</label>
-                      <input
-                        type="email"
+                      <label className="block text-xs font-bold text-slate-300 mb-2">Destinatário do relatório</label>
+                      <select
                         value={reportEmail}
                         onChange={(e) => setReportEmail(e.target.value)}
-                        placeholder="email cadastrado"
                         className="w-full bg-[#0b111e] border border-slate-800 rounded-xl p-3.5 text-sm text-white font-medium focus:outline-none focus:border-emerald-500"
-                      />
+                      >
+                        <option value="">Selecione um email cadastrado</option>
+                        {emailRecipients.map((recipient) => (
+                          <option key={recipient.id} value={recipient.email}>
+                            {recipient.name} ({recipient.email})
+                          </option>
+                        ))}
+                      </select>
                     </div>
 
                     <div>
@@ -1028,6 +1111,39 @@ export default function Dashboard() {
                       </button>
                     </div>
                   </div>
+
+                  <form onSubmit={handleRegisterRecipient} className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-4 items-end border-t border-slate-800/80 pt-5">
+                    <div>
+                      <label htmlFor="recipient-name" className="block text-xs font-bold text-slate-300 mb-1.5">Nome</label>
+                      <input
+                        id="recipient-name"
+                        value={recipientName}
+                        onChange={(e) => setRecipientName(e.target.value)}
+                        className="w-full bg-[#0b111e] border border-slate-800 rounded-xl p-3 text-sm text-white focus:outline-none focus:border-emerald-500"
+                        placeholder="Nome do destinatário"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="recipient-email" className="block text-xs font-bold text-slate-300 mb-1.5">Email</label>
+                      <input
+                        id="recipient-email"
+                        type="email"
+                        value={recipientEmail}
+                        onChange={(e) => setRecipientEmail(e.target.value)}
+                        className="w-full bg-[#0b111e] border border-slate-800 rounded-xl p-3 text-sm text-white focus:outline-none focus:border-emerald-500"
+                        placeholder="nome@empresa.com"
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={isSavingRecipient}
+                      className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold py-3 px-4 rounded-xl text-sm transition disabled:opacity-50"
+                    >
+                      {isSavingRecipient ? "Cadastrando..." : "Cadastrar E-mail"}
+                    </button>
+                    {recipientError && <p role="alert" className="md:col-span-3 text-xs text-rose-300">{recipientError}</p>}
+                    {recipientSuccess && <p role="status" className="md:col-span-3 text-xs text-emerald-300">{recipientSuccess}</p>}
+                  </form>
 
                   <p className="text-xs text-slate-300 flex items-center gap-2 font-medium">
                     <Clock className="w-4 h-4 text-slate-400" />

@@ -125,6 +125,91 @@ const initialTeamMembers = [
   { id: "MT-1203", name: "Rafael Lima", role: "Mecânico Ferroviário", spec: "Turbo e compressores", team: "Noite", phone: "(16) 99633-7788", initials: "RL" }
 ];
 
+const normalizePdfColors = (clonedDocument) => {
+  const canvas = clonedDocument.createElement("canvas");
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context || !clonedDocument.body) return;
+
+  const probe = clonedDocument.createElement("span");
+  clonedDocument.body.appendChild(probe);
+
+  const toRgb = (color) => {
+    probe.style.color = "";
+    probe.style.setProperty("color", color);
+    if (!probe.style.color) return null;
+
+    try {
+      context.clearRect(0, 0, 1, 1);
+      context.fillStyle = clonedDocument.defaultView.getComputedStyle(probe).color;
+      context.fillRect(0, 0, 1, 1);
+      const [red, green, blue, alpha] = context.getImageData(0, 0, 1, 1).data;
+      return `rgba(${red}, ${green}, ${blue}, ${(alpha / 255).toFixed(3)})`;
+    } catch {
+      return null;
+    }
+  };
+
+  const normalizeValue = (value) => {
+    const functionPattern = /\b(?:oklab|oklch|color-mix)\(/gi;
+    let normalized = "";
+    let cursor = 0;
+    let match;
+
+    while ((match = functionPattern.exec(value))) {
+      const openIndex = match.index + match[0].length - 1;
+      let depth = 0;
+      let closeIndex = -1;
+
+      for (let index = openIndex; index < value.length; index += 1) {
+        if (value[index] === "(") depth += 1;
+        if (value[index] === ")") depth -= 1;
+        if (depth === 0) {
+          closeIndex = index;
+          break;
+        }
+      }
+
+      if (closeIndex === -1) continue;
+
+      normalized += value.slice(cursor, match.index);
+      const colorFunction = value.slice(match.index, closeIndex + 1);
+      normalized += toRgb(colorFunction) || "rgb(0, 0, 0)";
+      cursor = closeIndex + 1;
+      functionPattern.lastIndex = cursor;
+    }
+
+    return `${normalized}${value.slice(cursor)}`.replace(/\bin\s+oklab\b/gi, "in srgb");
+  };
+
+  const normalizeStyle = (style) => {
+    Array.from(style).forEach((property) => {
+      const value = style.getPropertyValue(property);
+      const normalized = normalizeValue(value);
+      if (normalized !== value) {
+        style.setProperty(property, normalized, style.getPropertyPriority(property));
+      }
+    });
+  };
+
+  const normalizeRules = (rules) => {
+    Array.from(rules).forEach((rule) => {
+      if (rule.style) normalizeStyle(rule.style);
+      if (rule.cssRules) normalizeRules(rule.cssRules);
+    });
+  };
+
+  Array.from(clonedDocument.styleSheets).forEach((styleSheet) => {
+    try {
+      normalizeRules(styleSheet.cssRules);
+    } catch {
+      // Cross-origin stylesheets cannot be inspected from the cloned document.
+    }
+  });
+
+  clonedDocument.querySelectorAll("[style]").forEach((element) => normalizeStyle(element.style));
+  probe.remove();
+};
+
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState("equipe");
   const [compTab, setCompTab] = useState("instalados");
@@ -314,7 +399,7 @@ export default function Dashboard() {
       const options = {
         margin: 10,
         image: { type: "jpeg", quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true, logging: false },
+        html2canvas: { scale: 2, useCORS: true, logging: false, onclone: normalizePdfColors },
         jsPDF: { unit: "mm", format: "a4", orientation: "portrait" }
       };
 

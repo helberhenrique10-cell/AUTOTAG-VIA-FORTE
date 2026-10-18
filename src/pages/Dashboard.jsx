@@ -30,14 +30,15 @@ import {
 
 // --- DADOS MOCKADOS INICIAIS ---
 const initialLocomotives = [
-  { id: "L-4027", name: "Locomotiva L-4027 - AC4", model: "AC44", yard: "Pátio de Araraquara / Linha 04", odometer: 842615, status: "Ativa" },
-  { id: "L-4028", name: "Locomotiva L-4028 - AC44", model: "AC44", yard: "Pátio de Araraquara / Linha 02", odometer: 612400, status: "Ativa" },
-  { id: "L-2015", name: "Locomotiva L-2015 - C44", model: "C44-EMi", yard: "Pátio de Tubarão / Linha 01", odometer: 520100, status: "Em Manutenção" }
+  { id: "L-4027", name: "Locomotiva L-4027 - AC4", model: "AC44", yard: "Pátio de Araraquara / Linha 04", odometer: 842615, avgDailyKm: 820, lastRead: "última leitura há 16 dias", status: "Ativa" },
+  { id: "L-4028", name: "Locomotiva L-4028 - AC44", model: "AC44", yard: "Pátio de Araraquara / Linha 02", odometer: 612400, avgDailyKm: 820, lastRead: "—", status: "Ativa" },
+  { id: "L-2015", name: "Locomotiva L-2015 - C44", model: "C44-EMi", yard: "Pátio de Tubarão / Linha 01", odometer: 520100, avgDailyKm: 820, lastRead: "—", status: "Em Manutenção" }
 ];
 
 const initialComponents = [
   {
     id: "comp-1",
+    locomotiveId: "L-4027",
     name: "Injetor de combustível",
     type: "Injetor de Combustível",
     rfid: "JFJFJFJ",
@@ -52,6 +53,7 @@ const initialComponents = [
   },
   {
     id: "comp-2",
+    locomotiveId: "L-4027",
     name: "Turbo alimentador",
     type: "Turboalimentador",
     rfid: "9GHRHSUS",
@@ -66,6 +68,7 @@ const initialComponents = [
   },
   {
     id: "comp-3",
+    locomotiveId: "L-4027",
     name: "Governador de potência",
     type: "Governador de Potência",
     rfid: "4A8B9C10",
@@ -80,6 +83,7 @@ const initialComponents = [
   },
   {
     id: "comp-4",
+    locomotiveId: "L-4027",
     name: "Compressor de ar",
     type: "Compressor de Ar",
     rfid: "F5E607CB",
@@ -127,6 +131,12 @@ const initialTeamMembers = [
   { id: "MT-1203", name: "Rafael Lima", role: "Mecânico Ferroviário", spec: "Turbo e compressores", team: "Noite", phone: "(16) 99633-7788", initials: "RL" }
 ];
 
+const componentStatusClasses = {
+  Normal: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
+  "Atenção programada": "bg-amber-500/10 text-amber-400 border-amber-500/20",
+  "Intervenção crítica": "bg-rose-500/10 text-rose-400 border-rose-500/20"
+};
+
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState("equipe");
   const [compTab, setCompTab] = useState("instalados");
@@ -150,6 +160,13 @@ export default function Dashboard() {
   const [components, setComponents] = useState(initialComponents);
   const [orders, setOrders] = useState(initialOrders);
   const [teamMembers, setTeamMembers] = useState(initialTeamMembers);
+  const [recentEvents, setRecentEvents] = useState(historyEvents);
+  const [rfidRealtimeStatus, setRfidRealtimeStatus] = useState(supabase ? "connecting" : "not-configured");
+
+  const currentComponents = components.filter((component) => component.locomotiveId === currentLoco.id);
+  const attentionCount = currentComponents.filter((component) => component.status === "Atenção programada").length;
+  const criticalCount = currentComponents.filter((component) => component.status === "Intervenção crítica").length;
+  const normalCount = currentComponents.length - attentionCount - criticalCount;
 
   // Estados do Relatório (Envio Manual e Programado)
   const [reportEmail, setReportEmail] = useState("");
@@ -231,6 +248,188 @@ export default function Dashboard() {
   // Odômetro
   const [odometerInput, setOdometerInput] = useState(currentLoco.odometer.toString());
 
+  useEffect(() => {
+    if (!supabase) return undefined;
+
+    const channel = supabase
+      .channel("rfid-dashboard-realtime")
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "rfid_locomotives" }, ({ new: row }) => {
+        setLocomotives((current) => current.map((locomotive) => (
+          locomotive.id === row.id
+            ? {
+                ...locomotive,
+                odometer: Number(row.odometer_km),
+                avgDailyKm: Number(row.avg_daily_km),
+                lastReadingAt: row.last_reading_at,
+                lastRead: "agora mesmo"
+              }
+            : locomotive
+        )));
+        if (row.id === selectedLocoId) setOdometerInput(String(row.odometer_km));
+      })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "rfid_components" }, ({ new: row }) => {
+        setComponents((current) => current.map((component) => (
+          component.id === row.id
+            ? {
+                ...component,
+              locomotiveId: row.locomotive_id,
+                kmSinceInstall: Number(row.wear_km),
+                maxLife: Number(row.life_km),
+                remainingLife: Number(row.remaining_life_pct),
+                consumedPercent: 100 - Number(row.remaining_life_pct),
+                status: row.status,
+                lastReadingAt: row.last_read_at,
+                lastRead: "agora mesmo"
+              }
+            : component
+        )));
+      })
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "rfid_maintenance_events" }, ({ new: row }) => {
+        if (row.locomotive_id !== selectedLocoId) return;
+        setRecentEvents((current) => [
+          ...current.filter((event) => event.id !== row.id),
+          {
+            id: row.id,
+            type: row.type,
+            text: row.title,
+            detail: row.description,
+            date: new Date(row.created_at).toLocaleString("pt-BR"),
+            sortDate: row.created_at
+          }
+        ].sort((first, second) => new Date(second.sortDate || 0) - new Date(first.sortDate || 0)).slice(0, 10));
+      })
+      .subscribe((status) => {
+        setRfidRealtimeStatus(status === "SUBSCRIBED" ? "connected" : status === "CHANNEL_ERROR" || status === "TIMED_OUT" ? "error" : "connecting");
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          console.error("Falha na subscrição Supabase Realtime:", status);
+        }
+      });
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [selectedLocoId]);
+
+  useEffect(() => {
+    if (!supabase) return undefined;
+
+    let isActive = true;
+    const loadRfidSnapshot = async () => {
+      const [locomotiveResult, componentResult, eventResult] = await Promise.all([
+        supabase.from("rfid_locomotives").select("*"),
+        supabase.from("rfid_components").select("*").eq("active", true),
+        supabase.from("rfid_maintenance_events").select("*").eq("locomotive_id", selectedLocoId).order("created_at", { ascending: false }).limit(10)
+      ]);
+
+      if (!isActive) return;
+      [locomotiveResult, componentResult, eventResult].forEach(({ error }) => {
+        if (error) console.error("Erro ao carregar snapshot RFID:", error);
+      });
+
+      if (locomotiveResult.data) {
+        setLocomotives((current) => {
+          const existingIds = new Set(current.map((locomotive) => locomotive.id));
+          const updated = current.map((locomotive) => {
+            const row = locomotiveResult.data.find((item) => item.id === locomotive.id);
+            if (!row || (locomotive.lastReadingAt && row.last_reading_at && locomotive.lastReadingAt > row.last_reading_at)) return locomotive;
+            return {
+              ...locomotive,
+              odometer: Number(row.odometer_km),
+              avgDailyKm: Number(row.avg_daily_km),
+              lastReadingAt: row.last_reading_at,
+              lastRead: row.last_reading_at ? new Date(row.last_reading_at).toLocaleString("pt-BR") : locomotive.lastRead
+            };
+          });
+          const added = locomotiveResult.data
+            .filter((row) => !existingIds.has(row.id))
+            .map((row) => ({
+              id: row.id,
+              name: row.name,
+              model: row.model,
+              yard: row.yard,
+              odometer: Number(row.odometer_km),
+              avgDailyKm: Number(row.avg_daily_km),
+              lastReadingAt: row.last_reading_at,
+              lastRead: row.last_reading_at ? new Date(row.last_reading_at).toLocaleString("pt-BR") : "—",
+              status: row.status
+            }));
+          return [...updated, ...added];
+        });
+
+        const selectedRow = locomotiveResult.data.find((row) => row.id === selectedLocoId);
+        if (selectedRow) setOdometerInput(String(selectedRow.odometer_km));
+      }
+
+      if (componentResult.data) {
+        setComponents((current) => {
+          const existingIds = new Set(current.map((component) => component.id));
+          const updated = current.map((component) => {
+            const row = componentResult.data.find((item) => item.id === component.id);
+            if (!row || (component.lastReadingAt && row.last_read_at && component.lastReadingAt > row.last_read_at)) return component;
+            return {
+              ...component,
+              locomotiveId: row.locomotive_id,
+              type: row.component_type,
+              rfid: row.rfid_tag,
+              protheusCode: row.protheus_code,
+              installedKm: Number(row.installed_at_km),
+              kmSinceInstall: Number(row.wear_km),
+              maxLife: Number(row.life_km),
+              remainingLife: Number(row.remaining_life_pct),
+              consumedPercent: 100 - Number(row.remaining_life_pct),
+              status: row.status,
+              lastReadingAt: row.last_read_at,
+              lastRead: row.last_read_at ? new Date(row.last_read_at).toLocaleString("pt-BR") : component.lastRead
+            };
+          });
+          const added = componentResult.data
+            .filter((row) => !existingIds.has(row.id))
+            .map((row) => ({
+              id: row.id,
+              locomotiveId: row.locomotive_id,
+              name: row.name,
+              type: row.component_type,
+              rfid: row.rfid_tag,
+              protheusCode: row.protheus_code,
+              installedKm: Number(row.installed_at_km),
+              kmSinceInstall: Number(row.wear_km),
+              maxLife: Number(row.life_km),
+              remainingLife: Number(row.remaining_life_pct),
+              consumedPercent: 100 - Number(row.remaining_life_pct),
+              status: row.status,
+              lastReadingAt: row.last_read_at,
+              lastRead: row.last_read_at ? new Date(row.last_read_at).toLocaleString("pt-BR") : "—"
+            }));
+          return [...updated, ...added];
+        });
+      }
+
+      if (eventResult.data?.length) {
+        setRecentEvents((current) => {
+          const currentIds = new Set(current.map((event) => event.id));
+          const loaded = eventResult.data
+            .filter((row) => !currentIds.has(row.id))
+            .map((row) => ({
+              id: row.id,
+              type: row.type,
+              text: row.title,
+              detail: row.description,
+              date: new Date(row.created_at).toLocaleString("pt-BR"),
+              sortDate: row.created_at
+            }));
+          return [...loaded, ...current].slice(0, 10);
+        });
+      }
+    };
+
+    loadRfidSnapshot().catch((error) => {
+      if (isActive) console.error("Falha ao sincronizar snapshot RFID:", error);
+    });
+    return () => {
+      isActive = false;
+    };
+  }, [selectedLocoId]);
+
   const handleStatusChange = (id, newStatus) => {
     setOrders(orders.map((o) => (o.id === id ? { ...o, status: newStatus } : o)));
   };
@@ -242,6 +441,7 @@ export default function Dashboard() {
     }
     const newComp = {
       id: `comp-${Date.now()}`,
+      locomotiveId: currentLoco.id,
       name: newCompData.name,
       type: newCompData.type,
       rfid: newCompData.rfid,
@@ -277,6 +477,8 @@ export default function Dashboard() {
       model: newLocoData.model,
       yard: newLocoData.yard,
       odometer: Number(newLocoData.odometer) || 0,
+      avgDailyKm: 820,
+      lastRead: "—",
       status: "Ativa"
     };
     setLocomotives([...locomotives, newLoco]);
@@ -448,7 +650,7 @@ export default function Dashboard() {
         { title: "KM rodados", width: 30, value: (component) => Number(component.kmSinceInstall).toLocaleString("pt-BR") },
         { title: "Vida restante", width: 29, value: (component) => `${Number(component.remainingLife).toFixed(1)}%` },
         { title: "Estado", width: 39, value: (component) => component.status }
-      ], components);
+      ], currentComponents);
 
       drawTable("Ordens de servico", [
         { title: "OS", width: 24, value: (order) => order.id },
@@ -715,7 +917,7 @@ export default function Dashboard() {
               <span>{currentLoco.yard}</span>
               <span>•</span>
               <span className="text-emerald-400 font-bold flex items-center gap-1.5">● {currentLoco.status}</span>
-              <span className="text-slate-400">última leitura há 16 dias</span>
+              <span className="text-slate-400">{currentLoco.lastRead || "—"}</span>
             </div>
           </div>
 
@@ -725,7 +927,7 @@ export default function Dashboard() {
               {currentLoco.odometer.toLocaleString("pt-BR")}{" "}
               <span className="text-sm font-bold text-slate-400">km</span>
             </p>
-            <p className="text-xs text-slate-400 mt-0.5">FSV padrão: 1x • Média 820 km/dia</p>
+            <p className="text-xs text-slate-400 mt-0.5">FSV padrão: 1x • Média {Math.round(currentLoco.avgDailyKm || 0).toLocaleString("pt-BR")} km/dia</p>
           </div>
         </header>
 
@@ -741,7 +943,7 @@ export default function Dashboard() {
                       <Boxes className="w-5 h-5" />
                     </div>
                     <div>
-                      <p className="text-4xl font-black text-white">{components.length}</p>
+                      <p className="text-4xl font-black text-white">{currentComponents.length}</p>
                       <p className="text-sm font-semibold text-slate-300 mt-1">Componentes cadastrados</p>
                     </div>
                   </div>
@@ -751,7 +953,7 @@ export default function Dashboard() {
                       <CheckCircle2 className="w-5 h-5" />
                     </div>
                     <div>
-                      <p className="text-4xl font-black text-emerald-400">{components.length}</p>
+                      <p className="text-4xl font-black text-emerald-400">{normalCount}</p>
                       <p className="text-sm font-semibold text-slate-300 mt-1">Dentro do prazo</p>
                     </div>
                   </div>
@@ -761,7 +963,7 @@ export default function Dashboard() {
                       <AlertTriangle className="w-5 h-5" />
                     </div>
                     <div>
-                      <p className="text-4xl font-black text-amber-400">0</p>
+                      <p className="text-4xl font-black text-amber-400">{attentionCount}</p>
                       <p className="text-sm font-semibold text-slate-300 mt-1">Atenção programada</p>
                     </div>
                   </div>
@@ -771,7 +973,7 @@ export default function Dashboard() {
                       <XCircle className="w-5 h-5" />
                     </div>
                     <div>
-                      <p className="text-4xl font-black text-rose-400">0</p>
+                      <p className="text-4xl font-black text-rose-400">{criticalCount}</p>
                       <p className="text-sm font-semibold text-slate-300 mt-1">Intervenção crítica</p>
                     </div>
                   </div>
@@ -793,7 +995,7 @@ export default function Dashboard() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/60 font-medium">
-                      {components.map((c) => (
+                      {currentComponents.map((c) => (
                         <tr key={c.id} className="hover:bg-slate-800/30 transition">
                           <td className="p-4 font-bold text-white text-base">{c.name}</td>
                           <td className="p-4 font-mono text-emerald-400 font-bold">{c.rfid}</td>
@@ -803,8 +1005,8 @@ export default function Dashboard() {
                             <span className="font-extrabold text-slate-200 text-base">{c.remainingLife}%</span>
                           </td>
                           <td className="p-4">
-                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                              <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border ${componentStatusClasses[c.status] || componentStatusClasses.Normal}`}>
+                              {c.status === "Normal" ? <CheckCircle2 className="w-3.5 h-3.5" /> : c.status === "Atenção programada" ? <AlertTriangle className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
                               {c.status}
                             </span>
                           </td>
@@ -820,7 +1022,7 @@ export default function Dashboard() {
                   Histórico recente de eventos
                 </h3>
                 <div className="space-y-4">
-                  {historyEvents.map((ev) => (
+                  {recentEvents.map((ev) => (
                     <div key={ev.id} className="flex items-start gap-3.5 text-sm border-b border-slate-800/50 pb-3.5 last:border-0">
                       <div className="p-2 rounded-xl shrink-0 bg-blue-500/10 text-blue-400 mt-0.5">
                         <Clock className="w-4 h-4" />
@@ -851,11 +1053,11 @@ export default function Dashboard() {
 
                 <div className="flex items-center gap-3">
                   <button
-                    onClick={() => alert("Iniciando varredura via Sensor RFID na linha...")}
+                    onClick={() => setActiveTab("api")}
                     className="flex items-center gap-2.5 bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 px-4 py-2.5 rounded-xl text-sm font-bold transition"
                   >
                     <Radio className="w-4 h-4 text-emerald-400 animate-pulse" />
-                    Registrar via sensor RFID
+                    Integração do sensor RFID
                   </button>
 
                   <button
@@ -889,7 +1091,7 @@ export default function Dashboard() {
 
               {compTab === "instalados" ? (
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  {components.map((c) => (
+                  {currentComponents.map((c) => (
                     <div key={c.id} className="bg-[#0f172a] border border-slate-800/90 p-6 rounded-2xl space-y-5 shadow-lg">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3.5">
@@ -901,7 +1103,7 @@ export default function Dashboard() {
                             <span className="font-mono text-sm text-emerald-400 font-bold">{c.rfid}</span>
                           </div>
                         </div>
-                        <span className="px-3 py-1 rounded-full text-xs font-extrabold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                        <span className={`px-3 py-1 rounded-full text-xs font-extrabold border ${componentStatusClasses[c.status] || componentStatusClasses.Normal}`}>
                           ● {c.status}
                         </span>
                       </div>
@@ -912,7 +1114,7 @@ export default function Dashboard() {
                           <span className="text-slate-400 text-xs">restante</span>
                         </div>
                         <div className="w-full bg-slate-900 rounded-full h-2 overflow-hidden border border-slate-800">
-                          <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${c.remainingLife}%` }} />
+                          <div className={`h-full rounded-full ${c.status === "Intervenção crítica" ? "bg-rose-500" : c.status === "Atenção programada" ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${c.remainingLife}%` }} />
                         </div>
                       </div>
 
@@ -1262,11 +1464,14 @@ export default function Dashboard() {
                     </div>
 
                     <div className="flex-1 flex items-end justify-around pl-8 h-full">
-                      {components.map((c) => (
+                      {currentComponents.map((c) => (
                         <div key={c.id} className="flex flex-col items-center gap-2 h-full justify-end group">
                           <div
-                            className="w-16 bg-emerald-400 rounded-t-md transition-all duration-300 hover:bg-emerald-300"
-                            style={{ height: `${Math.max(c.consumedPercent, 4)}%` }}
+                            className="w-16 rounded-t-md transition-all duration-300"
+                            style={{
+                              height: `${Math.max(c.consumedPercent, 4)}%`,
+                              backgroundColor: c.status === "Intervenção crítica" ? "#fb7185" : c.status === "Atenção programada" ? "#fbbf24" : "#34d399"
+                            }}
                             title={`${c.name}: ${c.consumedPercent}%`}
                           />
                           <span className="text-xs text-slate-300 font-bold text-center truncate max-w-[100px]">
@@ -1284,14 +1489,15 @@ export default function Dashboard() {
                   </h4>
 
                   <div className="my-6 flex items-center justify-center">
-                    <div className="w-40 h-40 rounded-full border-[16px] border-emerald-400 flex items-center justify-center">
-                      <span className="text-sm font-black text-emerald-400">100% Normal</span>
+                    <div className={`w-40 h-40 rounded-full border-[16px] flex items-center justify-center ${criticalCount ? "border-rose-400" : attentionCount ? "border-amber-400" : "border-emerald-400"}`}>
+                      <span className="text-sm font-black text-slate-100">{currentComponents.length ? Math.round((normalCount / currentComponents.length) * 100) : 0}% Normal</span>
                     </div>
                   </div>
 
-                  <div className="flex justify-center items-center gap-2 text-sm font-extrabold text-emerald-400">
-                    <span className="w-3 h-3 rounded-full bg-emerald-400 inline-block" />
-                    <span>Normal ({components.length})</span>
+                  <div className="flex flex-wrap justify-center items-center gap-x-4 gap-y-2 text-xs font-bold">
+                    <span className="text-emerald-400">Normal ({normalCount})</span>
+                    <span className="text-amber-400">Atenção ({attentionCount})</span>
+                    <span className="text-rose-400">Críticos ({criticalCount})</span>
                   </div>
                 </div>
               </div>
@@ -1358,7 +1564,12 @@ export default function Dashboard() {
           {activeTab === "api" && (
             <div className="bg-[#0f172a] border border-slate-800 p-8 rounded-2xl space-y-4 max-w-2xl">
               <h3 className="text-xl font-black text-white">API & Integrações</h3>
-              <p className="text-sm text-slate-300">Conexão REST ativa com TOTVS Protheus ERP.</p>
+              <p className="text-sm text-slate-300">Supabase Realtime: {rfidRealtimeStatus === "connected" ? "conectado a locomotivas, componentes e eventos" : rfidRealtimeStatus === "error" ? "falha na subscrição; verifique tabela, publicação e permissões" : rfidRealtimeStatus === "not-configured" ? "configure as variáveis de conexão Supabase" : "conectando..."}.</p>
+              <div className="border-t border-slate-800 pt-4 space-y-2 text-sm text-slate-300">
+                <p className="font-bold text-white">RPC do leitor RFID</p>
+                <p>Chame <code className="text-emerald-300">incrementar_km</code> com <code className="text-emerald-300">tag_id</code> e <code className="text-emerald-300">km_acrescentar</code> (300 km por passagem, por omissão).</p>
+                <p>A função só pode ser chamada com a chave service role no backend do sensor. Nunca exponha essa chave no leitor ou no frontend.</p>
+              </div>
             </div>
           )}
         </div>
@@ -1611,7 +1822,7 @@ export default function Dashboard() {
                     onChange={(e) => setNewOsData({ ...newOsData, component: e.target.value })}
                     className="w-full bg-[#0b111e] border border-slate-800 rounded-xl p-3.5 text-slate-200 text-sm font-semibold appearance-none focus:outline-none focus:border-emerald-500 cursor-pointer"
                   >
-                    {components.map((c) => (
+                    {currentComponents.map((c) => (
                       <option key={c.id} value={c.name}>
                         {c.name}
                       </option>

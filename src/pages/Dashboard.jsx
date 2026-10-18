@@ -74,7 +74,7 @@ const componentStatusClasses = {
   "Intervenção crítica": "bg-rose-500/10 text-rose-400 border-rose-500/20"
 };
 
-const getComponentWearKm = (component) => Number(component.wear_km ?? component.km_instalacao ?? component.installed_at_km ?? 0);
+const getComponentWearKm = (component) => Number(component.km_since_install ?? component.wear_km ?? 0);
 
 const mapComponentForDisplay = (row, displayLocomotiveId = row.locomotive_id) => {
   const wearKm = getComponentWearKm(row);

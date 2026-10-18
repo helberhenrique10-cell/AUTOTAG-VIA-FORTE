@@ -150,12 +150,10 @@ export default function Dashboard() {
   const [teamMembers, setTeamMembers] = useState(initialTeamMembers);
 
   // Estados do Relatório (Envio Manual e Programado)
-  const [reportEmail, setReportEmail] = useState("helber.lima@docente.senai.br");
+  const [reportEmail, setReportEmail] = useState("");
   const [autoDate, setAutoDate] = useState("2026-10-20");
   const [autoFrequency, setAutoFrequency] = useState("Semanal");
-  const [scheduledReports, setScheduledReports] = useState([
-    { id: 1, email: "helber.lima@docente.senai.br", date: "2026-10-20", frequency: "Semanal", status: "Ativo" }
-  ]);
+  const [scheduledReports, setScheduledReports] = useState([]);
   const [isSending, setIsSending] = useState(false);
 
   // Form de Vincular Componente
@@ -304,54 +302,48 @@ export default function Dashboard() {
   };
 
   const handleSendManualPDF = async () => {
-    if (!reportEmail) {
-      alert("Por favor, insira um e-mail válido!");
-      return;
-    }
-
     setIsSending(true);
 
     try {
-      // 1. Elemento do relatório para converter em PDF
-      const element = document.getElementById("report-content") || document.body;
+      const element = document.getElementById("report-content");
+      if (!element) {
+        throw new Error("O conteúdo do relatório não foi encontrado.");
+      }
 
-      // 2. Configurações de exportação do PDF
-      const opt = {
+      const filename = `Relatorio_Status_${currentLoco.id}_${new Date().toISOString().slice(0, 10)}.pdf`;
+      const options = {
         margin: 10,
-        filename: `Relatorio_Status_${currentLoco.id}_${new Date().toISOString().slice(0, 10)}.pdf`,
         image: { type: "jpeg", quality: 0.98 },
         html2canvas: { scale: 2, useCORS: true, logging: false },
         jsPDF: { unit: "mm", format: "a4", orientation: "portrait" }
       };
 
-      // 3. Geração e download imediato do ficheiro PDF
-      await html2pdf().set(opt).from(element).save();
+      const pdfBlob = await html2pdf().set(options).from(element).outputPdf("blob");
+      if (!(pdfBlob instanceof Blob) || pdfBlob.size === 0) {
+        throw new Error("A geração do PDF não retornou um ficheiro válido.");
+      }
 
-      // 4. Abertura do cliente de e-mail com dados pré-preenchidos
-      const subject = encodeURIComponent(`Relatório de Status - ${currentLoco.name}`);
-      const body = encodeURIComponent(
-        `Olá,\n\nSegue o relatório atualizado da ${currentLoco.name}.\n\n` +
-        `• Odômetro: ${currentLoco.odometer.toLocaleString("pt-BR")} km\n` +
-        `• Componentes Ativos: ${components.length}\n` +
-        `• Status do Ativo: ${currentLoco.status}\n\n` +
-        `O ficheiro PDF do relatório foi gerado e descarregado para o seu dispositivo. Anexe-o a esta mensagem para concluir o envio.\n\n` +
-        `Atenciosamente,\nSistema ViaForte`
-      );
+      const downloadUrl = URL.createObjectURL(pdfBlob);
+      const downloadLink = document.createElement("a");
+      downloadLink.href = downloadUrl;
+      downloadLink.download = filename;
+      document.body.appendChild(downloadLink);
+      downloadLink.click();
+      downloadLink.remove();
+      window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
 
-      window.location.href = `mailto:${reportEmail}?subject=${subject}&body=${body}`;
-
-      alert(`✅ PDF gerado com sucesso!\n\nFoi efetuado o download do ficheiro no seu dispositivo e aberto o seu cliente de e-mail preenchido para: ${reportEmail}`);
+      alert(`✅ PDF descarregado como ${filename}. O envio por email requer um serviço de email configurado.`);
     } catch (error) {
-      console.error("Erro ao gerar/enviar PDF:", error);
-      alert("⚠️ Ocorreu um erro ao gerar o PDF. Verifique se o módulo html2pdf.js está devidamente carregado.");
+      console.error("Erro ao gerar/descarregar PDF:", error);
+      alert(`⚠️ Não foi possível gerar o PDF: ${error.message || "erro inesperado"}`);
     } finally {
       setIsSending(false);
     }
   };
 
   const handleScheduleAutoReport = () => {
-    if (!reportEmail || !autoDate) {
-      alert("Preencha o e-mail e a data de envio!");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reportEmail) || !autoDate) {
+      alert("Insira um e-mail válido e a data do agendamento!");
       return;
     }
     const newSchedule = {
@@ -362,7 +354,7 @@ export default function Dashboard() {
       status: "Ativo"
     };
     setScheduledReports([...scheduledReports, newSchedule]);
-    alert(`📅 Envio automático registrado para ${autoDate} (${autoFrequency})!`);
+    alert(`Agendamento registrado nesta sessão para ${autoDate} (${autoFrequency}). O email não será enviado automaticamente sem um serviço de email e agendador no servidor.`);
   };
 
   return (
@@ -925,17 +917,18 @@ export default function Dashboard() {
 
               <div className="bg-[#0f172a] border border-slate-800/80 rounded-2xl overflow-hidden shadow-lg">
                 <div className="p-5 border-b border-slate-800/80">
-                  <h4 className="font-extrabold text-white text-base">Relatório de status por email (PDF)</h4>
+                  <h4 className="font-extrabold text-white text-base">Relatório de status (PDF)</h4>
                 </div>
 
                 <div className="p-6 space-y-6">
                   <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-end">
                     <div className="lg:col-span-2">
-                      <label className="block text-xs font-bold text-slate-300 mb-2">Enviar para</label>
+                      <label className="block text-xs font-bold text-slate-300 mb-2">Email para agendamento</label>
                       <input
                         type="email"
                         value={reportEmail}
                         onChange={(e) => setReportEmail(e.target.value)}
+                        placeholder="email cadastrado"
                         className="w-full bg-[#0b111e] border border-slate-800 rounded-xl p-3.5 text-sm text-white font-medium focus:outline-none focus:border-emerald-500"
                       />
                     </div>
@@ -947,21 +940,24 @@ export default function Dashboard() {
                         className="w-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold py-3.5 px-5 rounded-xl text-sm transition flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-500/10 disabled:opacity-50"
                       >
                         {isSending ? <Loader2 className="w-5 h-5 animate-spin" /> : <Mail className="w-5 h-5" />}
-                        {isSending ? "Enviando..." : "Gerar e enviar PDF"}
+                        {isSending ? "Gerando PDF..." : "Descarregar PDF"}
                       </button>
                     </div>
                   </div>
 
                   <p className="text-xs text-slate-300 flex items-center gap-2 font-medium">
                     <Clock className="w-4 h-4 text-slate-400" />
-                    Gera um PDF com o status, consumo de vida útil e previsão de troca de cada componente e envia por email.
+                    Gera e descarrega um PDF com o status, consumo de vida útil e previsão de troca dos componentes.
                   </p>
 
                   <div className="border-t border-slate-800/80 pt-5 mt-5">
-                    <h5 className="font-extrabold text-white text-sm mb-4 flex items-center gap-2">
+                    <h5 className="font-extrabold text-white text-sm mb-2 flex items-center gap-2">
                       <Calendar className="w-5 h-5 text-emerald-400" />
-                      Programar Envio Automático do Relatório
+                      Agendamento de Relatórios
                     </h5>
+                    <p className="text-xs text-slate-400 mb-4">
+                      O agendamento fica nesta sessão; o envio automático exige integração de email e um agendador no servidor.
+                    </p>
 
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
                       <div>
@@ -992,7 +988,7 @@ export default function Dashboard() {
                         className="bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-700 font-extrabold py-3 px-4 rounded-xl text-sm transition flex items-center justify-center gap-2"
                       >
                         <Plus className="w-4 h-4" />
-                        Registrar Envio Automático
+                        Registrar Agendamento
                       </button>
                     </div>
 

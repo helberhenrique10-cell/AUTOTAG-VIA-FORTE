@@ -1,5 +1,5 @@
 import { useState } from "react";
-import html2pdf from "html2pdf.js";
+import { jsPDF } from "jspdf";
 import {
   Train,
   LayoutDashboard,
@@ -124,91 +124,6 @@ const initialTeamMembers = [
   { id: "MT-1187", name: "Juliana Rocha", role: "Técnica Eletromecânica", spec: "Sistemas de injeção", team: "Tarde", phone: "(16) 99745-2210", initials: "JR" },
   { id: "MT-1203", name: "Rafael Lima", role: "Mecânico Ferroviário", spec: "Turbo e compressores", team: "Noite", phone: "(16) 99633-7788", initials: "RL" }
 ];
-
-const normalizePdfColors = (clonedDocument) => {
-  const canvas = clonedDocument.createElement("canvas");
-  const context = canvas.getContext("2d", { willReadFrequently: true });
-  if (!context || !clonedDocument.body) return;
-
-  const probe = clonedDocument.createElement("span");
-  clonedDocument.body.appendChild(probe);
-
-  const toRgb = (color) => {
-    probe.style.color = "";
-    probe.style.setProperty("color", color);
-    if (!probe.style.color) return null;
-
-    try {
-      context.clearRect(0, 0, 1, 1);
-      context.fillStyle = clonedDocument.defaultView.getComputedStyle(probe).color;
-      context.fillRect(0, 0, 1, 1);
-      const [red, green, blue, alpha] = context.getImageData(0, 0, 1, 1).data;
-      return `rgba(${red}, ${green}, ${blue}, ${(alpha / 255).toFixed(3)})`;
-    } catch {
-      return null;
-    }
-  };
-
-  const normalizeValue = (value) => {
-    const functionPattern = /\b(?:oklab|oklch|color-mix)\(/gi;
-    let normalized = "";
-    let cursor = 0;
-    let match;
-
-    while ((match = functionPattern.exec(value))) {
-      const openIndex = match.index + match[0].length - 1;
-      let depth = 0;
-      let closeIndex = -1;
-
-      for (let index = openIndex; index < value.length; index += 1) {
-        if (value[index] === "(") depth += 1;
-        if (value[index] === ")") depth -= 1;
-        if (depth === 0) {
-          closeIndex = index;
-          break;
-        }
-      }
-
-      if (closeIndex === -1) continue;
-
-      normalized += value.slice(cursor, match.index);
-      const colorFunction = value.slice(match.index, closeIndex + 1);
-      normalized += toRgb(colorFunction) || "rgb(0, 0, 0)";
-      cursor = closeIndex + 1;
-      functionPattern.lastIndex = cursor;
-    }
-
-    return `${normalized}${value.slice(cursor)}`.replace(/\bin\s+oklab\b/gi, "in srgb");
-  };
-
-  const normalizeStyle = (style) => {
-    Array.from(style).forEach((property) => {
-      const value = style.getPropertyValue(property);
-      const normalized = normalizeValue(value);
-      if (normalized !== value) {
-        style.setProperty(property, normalized, style.getPropertyPriority(property));
-      }
-    });
-  };
-
-  const normalizeRules = (rules) => {
-    Array.from(rules).forEach((rule) => {
-      if (rule.style) normalizeStyle(rule.style);
-      if (rule.cssRules) normalizeRules(rule.cssRules);
-    });
-  };
-
-  Array.from(clonedDocument.styleSheets).forEach((styleSheet) => {
-    try {
-      normalizeRules(styleSheet.cssRules);
-    } catch {
-      // Cross-origin stylesheets cannot be inspected from the cloned document.
-    }
-  });
-
-  clonedDocument.querySelectorAll("[style]").forEach((element) => normalizeStyle(element.style));
-  probe.remove();
-};
 
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState("equipe");
@@ -390,33 +305,117 @@ export default function Dashboard() {
     setIsSending(true);
 
     try {
-      const element = document.getElementById("report-content");
-      if (!element) {
-        throw new Error("O conteúdo do relatório não foi encontrado.");
-      }
-
       const filename = `Relatorio_Status_${currentLoco.id}_${new Date().toISOString().slice(0, 10)}.pdf`;
-      const options = {
-        margin: 10,
-        image: { type: "jpeg", quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true, logging: false, onclone: normalizePdfColors },
-        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" }
+      const pdf = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 14;
+      const contentWidth = pageWidth - margin * 2;
+      let cursorY = 48;
+
+      pdf.setFillColor(15, 23, 42);
+      pdf.rect(0, 0, pageWidth, 32, "F");
+      pdf.setTextColor(255, 255, 255);
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(17);
+      pdf.text("ViaForte | AutoTag - Relatorio de status", margin, 14);
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(9);
+      pdf.text(`Gerado em ${new Date().toLocaleString("pt-BR")}`, margin, 23);
+
+      pdf.setTextColor(15, 23, 42);
+      pdf.setFontSize(10);
+      pdf.text(`Locomotiva: ${currentLoco.name}`, margin, 40);
+      pdf.text(`Modelo: ${currentLoco.model}`, margin + 100, 40);
+      pdf.text(`Odometro: ${Number(currentLoco.odometer).toLocaleString("pt-BR")} km`, margin + 155, 40);
+      pdf.text(`Patio: ${currentLoco.yard}`, margin, 45);
+      pdf.text(`Estado: ${currentLoco.status}`, margin + 155, 45);
+
+      const drawTable = (title, columns, rows) => {
+        const headerHeight = 9;
+        const drawSection = () => {
+          pdf.setFont("helvetica", "bold");
+          pdf.setFontSize(11);
+          pdf.setTextColor(15, 23, 42);
+          pdf.text(title, margin, cursorY);
+          cursorY += 5;
+        };
+        const drawHeader = () => {
+          pdf.setFillColor(30, 41, 59);
+          pdf.rect(margin, cursorY, contentWidth, headerHeight, "F");
+          pdf.setFont("helvetica", "bold");
+          pdf.setFontSize(7.5);
+          pdf.setTextColor(255, 255, 255);
+          let x = margin;
+          columns.forEach((column) => {
+            const lines = pdf.splitTextToSize(column.title, column.width - 4).slice(0, 2);
+            pdf.text(lines, x + 2, cursorY + (lines.length > 1 ? 3.5 : 5.5));
+            x += column.width;
+          });
+          cursorY += headerHeight;
+        };
+
+        drawSection();
+        drawHeader();
+        rows.forEach((row, index) => {
+          const cells = columns.map((column) =>
+            pdf.splitTextToSize(String(column.value(row) ?? "-"), column.width - 4).slice(0, 2)
+          );
+          const rowHeight = Math.max(8, ...cells.map((lines) => lines.length * 3.5 + 3));
+
+          if (cursorY + rowHeight > pageHeight - margin) {
+            pdf.addPage();
+            cursorY = margin;
+            pdf.setFont("helvetica", "normal");
+            pdf.setFontSize(8);
+            pdf.setTextColor(71, 85, 105);
+            pdf.text("ViaForte | AutoTag - Relatorio de status (continuacao)", margin, cursorY);
+            cursorY += 6;
+            drawSection();
+            drawHeader();
+          }
+
+          if (index % 2 === 1) {
+            pdf.setFillColor(241, 245, 249);
+            pdf.rect(margin, cursorY, contentWidth, rowHeight, "F");
+          }
+          pdf.setDrawColor(203, 213, 225);
+          pdf.line(margin, cursorY + rowHeight, margin + contentWidth, cursorY + rowHeight);
+          pdf.setFont("helvetica", "normal");
+          pdf.setFontSize(7.5);
+          pdf.setTextColor(15, 23, 42);
+          let x = margin;
+          cells.forEach((lines, cellIndex) => {
+            pdf.text(lines, x + 2, cursorY + 4.5);
+            x += columns[cellIndex].width;
+          });
+          cursorY += rowHeight;
+        });
+        cursorY += 9;
       };
 
-      const pdfBlob = await html2pdf().set(options).from(element).outputPdf("blob");
-      if (!(pdfBlob instanceof Blob) || pdfBlob.size === 0) {
-        throw new Error("A geração do PDF não retornou um ficheiro válido.");
-      }
+      drawTable("Componentes", [
+        { title: "Componente", width: 48, value: (component) => component.name },
+        { title: "Tipo", width: 43, value: (component) => component.type },
+        { title: "RFID", width: 22, value: (component) => component.rfid },
+        { title: "Protheus", width: 28, value: (component) => component.protheusCode },
+        { title: "KM instalacao", width: 30, value: (component) => Number(component.installedKm).toLocaleString("pt-BR") },
+        { title: "KM rodados", width: 30, value: (component) => Number(component.kmSinceInstall).toLocaleString("pt-BR") },
+        { title: "Vida restante", width: 29, value: (component) => `${Number(component.remainingLife).toFixed(1)}%` },
+        { title: "Estado", width: 39, value: (component) => component.status }
+      ], components);
 
-      const downloadUrl = URL.createObjectURL(pdfBlob);
-      const downloadLink = document.createElement("a");
-      downloadLink.href = downloadUrl;
-      downloadLink.download = filename;
-      document.body.appendChild(downloadLink);
-      downloadLink.click();
-      downloadLink.remove();
-      window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+      drawTable("Ordens de servico", [
+        { title: "OS", width: 24, value: (order) => order.id },
+        { title: "Data", width: 31, value: (order) => order.date },
+        { title: "Servico", width: 42, value: (order) => order.type },
+        { title: "Detalhes", width: 67, value: (order) => order.details },
+        { title: "Responsavel", width: 42, value: (order) => order.responsible },
+        { title: "Prioridade", width: 32, value: (order) => order.priority },
+        { title: "Estado", width: 31, value: (order) => order.status }
+      ], orders);
 
+      pdf.save(filename);
       alert(`✅ PDF descarregado como ${filename}. O envio por email requer um serviço de email configurado.`);
     } catch (error) {
       console.error("Erro ao gerar/descarregar PDF:", error);

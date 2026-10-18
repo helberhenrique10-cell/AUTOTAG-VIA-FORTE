@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { jsPDF } from "jspdf";
+import emailjs from "@emailjs/browser";
 import { supabase } from "@/lib/supabaseClient";
 import {
   Train,
@@ -341,6 +342,10 @@ export default function Dashboard() {
       alert("Selecione um destinatário cadastrado antes de enviar o relatório.");
       return;
     }
+    if (!import.meta.env.VITE_EMAILJS_SERVICE_ID || !import.meta.env.VITE_EMAILJS_TEMPLATE_ID || !import.meta.env.VITE_EMAILJS_PUBLIC_KEY) {
+      alert("Configure VITE_EMAILJS_SERVICE_ID, VITE_EMAILJS_TEMPLATE_ID e VITE_EMAILJS_PUBLIC_KEY na Vercel.");
+      return;
+    }
 
     setIsSending(true);
 
@@ -463,20 +468,12 @@ export default function Dashboard() {
         reader.readAsDataURL(pdfBlob);
       });
 
-      const response = await fetch("/api/send-pdf", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          to: reportEmail,
-          pdfBase64,
-          filename,
-          locomotiveName: currentLoco.name,
-        }),
-      });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(result.error || "O servidor não conseguiu enviar o relatório.");
-      }
+      await emailjs.send(
+        import.meta.env.VITE_EMAILJS_SERVICE_ID,
+        import.meta.env.VITE_EMAILJS_TEMPLATE_ID,
+        { to_email: reportEmail, content: pdfBase64 },
+        import.meta.env.VITE_EMAILJS_PUBLIC_KEY
+      );
 
       const downloadUrl = URL.createObjectURL(pdfBlob);
       const downloadLink = document.createElement("a");

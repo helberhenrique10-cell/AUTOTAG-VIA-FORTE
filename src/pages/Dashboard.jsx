@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { jsPDF } from "jspdf";
 import emailjs from "@emailjs/browser";
 import { supabase } from "@/lib/supabaseClient";
@@ -33,69 +33,6 @@ const initialLocomotives = [
   { id: "L-4027", name: "Locomotiva L-4027 - AC4", model: "AC44", yard: "Pátio de Araraquara / Linha 04", odometer: 842615, avgDailyKm: 820, lastRead: "última leitura há 16 dias", status: "Ativa" },
   { id: "L-4028", name: "Locomotiva L-4028 - AC44", model: "AC44", yard: "Pátio de Araraquara / Linha 02", odometer: 612400, avgDailyKm: 820, lastRead: "—", status: "Ativa" },
   { id: "L-2015", name: "Locomotiva L-2015 - C44", model: "C44-EMi", yard: "Pátio de Tubarão / Linha 01", odometer: 520100, avgDailyKm: 820, lastRead: "—", status: "Em Manutenção" }
-];
-
-const initialComponents = [
-  {
-    id: "comp-1",
-    locomotiveId: "L-4027",
-    name: "Injetor de combustível",
-    type: "Injetor de Combustível",
-    rfid: "JFJFJFJ",
-    protheusCode: "MD2100904",
-    installedKm: 842615,
-    kmSinceInstall: 0,
-    maxLife: 180000,
-    remainingLife: 100.0,
-    consumedPercent: 0.0,
-    status: "Normal",
-    lastRead: "—"
-  },
-  {
-    id: "comp-2",
-    locomotiveId: "L-4027",
-    name: "Turbo alimentador",
-    type: "Turboalimentador",
-    rfid: "9GHRHSUS",
-    protheusCode: "NE1800507",
-    installedKm: 842615,
-    kmSinceInstall: 0,
-    maxLife: 120000,
-    remainingLife: 100.0,
-    consumedPercent: 0.0,
-    status: "Normal",
-    lastRead: "—"
-  },
-  {
-    id: "comp-3",
-    locomotiveId: "L-4027",
-    name: "Governador de potência",
-    type: "Governador de Potência",
-    rfid: "4A8B9C10",
-    protheusCode: "NE1400447",
-    installedKm: 800000,
-    kmSinceInstall: 42615,
-    maxLife: 100000,
-    remainingLife: 57.4,
-    consumedPercent: 42.6,
-    status: "Normal",
-    lastRead: "há 16 dias"
-  },
-  {
-    id: "comp-4",
-    locomotiveId: "L-4027",
-    name: "Compressor de ar",
-    type: "Compressor de Ar",
-    rfid: "F5E607CB",
-    protheusCode: "ME1400772",
-    installedKm: 811135,
-    kmSinceInstall: 31480,
-    maxLife: 150000,
-    remainingLife: 79.0,
-    consumedPercent: 21.0,
-    status: "Normal",
-    lastRead: "há 16 dias"
-  }
 ];
 
 const initialOrders = [
@@ -137,6 +74,42 @@ const componentStatusClasses = {
   "Intervenção crítica": "bg-rose-500/10 text-rose-400 border-rose-500/20"
 };
 
+const getComponentWearKm = (component) => Number(component.wear_km ?? component.km_instalacao ?? component.installed_at_km ?? 0);
+
+const mapComponentForDisplay = (row, displayLocomotiveId = row.locomotive_id) => {
+  const wearKm = getComponentWearKm(row);
+  const maxLife = Number(row.life_km || 100000);
+  const consumedPercent = (wearKm / maxLife) * 100;
+  const remainingLife = Math.max(0, Math.round(((maxLife - wearKm) / maxLife) * 100));
+  const storedStatus = String(row.status ?? "").toLowerCase();
+  const status = ["intervenção crítica", "critico", "crítico", "critical"].includes(storedStatus)
+    ? "Intervenção crítica"
+    : ["atenção programada", "atencao", "atenção", "attention"].includes(storedStatus)
+      ? "Atenção programada"
+      : consumedPercent >= 90
+        ? "Intervenção crítica"
+        : consumedPercent > 70
+          ? "Atenção programada"
+          : "Normal";
+
+  return {
+    id: row.id || row.uic_tag,
+    locomotiveId: displayLocomotiveId,
+    name: row.name || row.component || "Componente",
+    type: row.type || row.component_type || "Outro",
+    rfid: row.rfid || row.rfid_tag || row.uic_tag || "—",
+    protheusCode: row.protheus_code || row.protheusCode || "—",
+    installedKm: Number(row.installed_at_km ?? row.odometer_km ?? 0),
+    kmSinceInstall: wearKm,
+    maxLife,
+    remainingLife,
+    consumedPercent,
+    status,
+    lastReadingAt: row.last_read_at || null,
+    lastRead: row.last_read_at ? new Date(row.last_read_at).toLocaleString("pt-BR") : "—"
+  };
+};
+
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState("equipe");
   const [compTab, setCompTab] = useState("instalados");
@@ -157,13 +130,22 @@ export default function Dashboard() {
   const [showNovoTecnicoModal, setShowNovoTecnicoModal] = useState(false);
 
   // Estados dos Dados
-  const [components, setComponents] = useState(initialComponents);
+  const [components, setComponents] = useState([]);
   const [orders, setOrders] = useState(initialOrders);
   const [teamMembers, setTeamMembers] = useState(initialTeamMembers);
   const [recentEvents, setRecentEvents] = useState(historyEvents);
   const [rfidRealtimeStatus, setRfidRealtimeStatus] = useState(supabase ? "connecting" : "not-configured");
+  const [updatedComponentId, setUpdatedComponentId] = useState(null);
+  const componentFlashTimeout = useRef(null);
 
-  const currentComponents = components.filter((component) => component.locomotiveId === currentLoco.id);
+  const currentLocoDbId = String(currentLoco.supabaseId || currentLoco.id);
+  const currentComponents = components
+    .filter((component) => (
+      component.locomotive_id == null ||
+      String(component.locomotive_id) === currentLocoDbId ||
+      String(component.locomotive_id) === String(currentLoco.code || currentLoco.id)
+    ))
+    .map((component) => mapComponentForDisplay(component, currentLoco.id));
   const attentionCount = currentComponents.filter((component) => component.status === "Atenção programada").length;
   const criticalCount = currentComponents.filter((component) => component.status === "Intervenção crítica").length;
   const normalCount = currentComponents.length - attentionCount - criticalCount;
@@ -250,14 +232,30 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!supabase) return undefined;
+    const selectedLocoDbId = currentLoco.supabaseId || selectedLocoId;
+
+    const applyComponentChange = (row) => {
+      if (String(row.locomotive_id) !== String(selectedLocoDbId)) return;
+      const rowId = row.id || row.uic_tag;
+      setComponents((current) => {
+        if (row.active === false) return current.filter((component) => (component.id || component.uic_tag) !== rowId);
+        const exists = current.some((component) => (component.id || component.uic_tag) === rowId);
+        if (!exists) return [...current, row];
+        return current.map((component) => (component.id || component.uic_tag) === rowId ? row : component);
+      });
+      setUpdatedComponentId(rowId);
+      window.clearTimeout(componentFlashTimeout.current);
+      componentFlashTimeout.current = window.setTimeout(() => setUpdatedComponentId(null), 1000);
+    };
 
     const channel = supabase
-      .channel("rfid-dashboard-realtime")
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "rfid_locomotives" }, ({ new: row }) => {
+      .channel("public:components")
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "locomotives" }, ({ new: row }) => {
         setLocomotives((current) => current.map((locomotive) => (
-          locomotive.id === row.id
+          String(locomotive.supabaseId || locomotive.id) === String(row.id) || String(locomotive.id) === String(row.code)
             ? {
                 ...locomotive,
+                supabaseId: row.id,
                 odometer: Number(row.odometer_km),
                 avgDailyKm: Number(row.avg_daily_km),
                 lastReadingAt: row.last_reading_at,
@@ -265,25 +263,12 @@ export default function Dashboard() {
               }
             : locomotive
         )));
-        if (row.id === selectedLocoId) setOdometerInput(String(row.odometer_km));
+        if (String(row.id) === String(selectedLocoDbId) || String(row.code) === String(selectedLocoId)) {
+          setOdometerInput(String(row.odometer_km));
+        }
       })
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "rfid_components" }, ({ new: row }) => {
-        setComponents((current) => current.map((component) => (
-          component.id === row.id
-            ? {
-                ...component,
-              locomotiveId: row.locomotive_id,
-                kmSinceInstall: Number(row.wear_km),
-                maxLife: Number(row.life_km),
-                remainingLife: Number(row.remaining_life_pct),
-                consumedPercent: 100 - Number(row.remaining_life_pct),
-                status: row.status,
-                lastReadingAt: row.last_read_at,
-                lastRead: "agora mesmo"
-              }
-            : component
-        )));
-      })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "components" }, ({ new: row }) => applyComponentChange(row))
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "components" }, ({ new: row }) => applyComponentChange(row))
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "rfid_maintenance_events" }, ({ new: row }) => {
         if (row.locomotive_id !== selectedLocoId) return;
         setRecentEvents((current) => [
@@ -306,34 +291,46 @@ export default function Dashboard() {
       });
 
     return () => {
+      window.clearTimeout(componentFlashTimeout.current);
       supabase.removeChannel(channel);
     };
-  }, [selectedLocoId]);
+  }, [selectedLocoId, currentLoco.supabaseId]);
 
   useEffect(() => {
     if (!supabase) return undefined;
+    const selectedLocoDbId = currentLoco.supabaseId || selectedLocoId;
 
     let isActive = true;
     const loadRfidSnapshot = async () => {
-      const [locomotiveResult, componentResult, eventResult] = await Promise.all([
-        supabase.from("rfid_locomotives").select("*"),
-        supabase.from("rfid_components").select("*").eq("active", true),
-        supabase.from("rfid_maintenance_events").select("*").eq("locomotive_id", selectedLocoId).order("created_at", { ascending: false }).limit(10)
-      ]);
+      const locomotiveResult = await supabase.from("locomotives").select("*");
+      if (!isActive) return;
+      const selectedDbLoco = locomotiveResult.data?.find((row) =>
+        String(row.id) === String(selectedLocoDbId) || String(row.code) === String(selectedLocoId)
+      );
+      const locomotiveDbId = selectedDbLoco?.id || selectedLocoDbId;
+      const eventResult = await supabase
+        .from("rfid_maintenance_events")
+        .select("*")
+        .eq("locomotive_id", locomotiveDbId)
+        .order("created_at", { ascending: false })
+        .limit(10);
 
       if (!isActive) return;
-      [locomotiveResult, componentResult, eventResult].forEach(({ error }) => {
+      [locomotiveResult, eventResult].forEach(({ error }) => {
         if (error) console.error("Erro ao carregar snapshot RFID:", error);
       });
 
       if (locomotiveResult.data) {
         setLocomotives((current) => {
-          const existingIds = new Set(current.map((locomotive) => locomotive.id));
+          const existingIds = new Set(current.map((locomotive) => String(locomotive.supabaseId || locomotive.id)));
           const updated = current.map((locomotive) => {
-            const row = locomotiveResult.data.find((item) => item.id === locomotive.id);
+            const row = locomotiveResult.data.find((item) =>
+              String(item.id) === String(locomotive.supabaseId || locomotive.id) || String(item.code) === String(locomotive.id)
+            );
             if (!row || (locomotive.lastReadingAt && row.last_reading_at && locomotive.lastReadingAt > row.last_reading_at)) return locomotive;
             return {
               ...locomotive,
+              supabaseId: row.id,
               odometer: Number(row.odometer_km),
               avgDailyKm: Number(row.avg_daily_km),
               lastReadingAt: row.last_reading_at,
@@ -341,10 +338,12 @@ export default function Dashboard() {
             };
           });
           const added = locomotiveResult.data
-            .filter((row) => !existingIds.has(row.id))
+            .filter((row) => !existingIds.has(String(row.id)) && !current.some((locomotive) => String(locomotive.id) === String(row.code || row.id)))
             .map((row) => ({
-              id: row.id,
-              name: row.name,
+              id: row.code || row.id,
+              code: row.code || row.id,
+              supabaseId: row.id,
+              name: row.name || `Locomotiva ${row.code || row.id}`,
               model: row.model,
               yard: row.yard,
               odometer: Number(row.odometer_km),
@@ -356,52 +355,8 @@ export default function Dashboard() {
           return [...updated, ...added];
         });
 
-        const selectedRow = locomotiveResult.data.find((row) => row.id === selectedLocoId);
+        const selectedRow = selectedDbLoco;
         if (selectedRow) setOdometerInput(String(selectedRow.odometer_km));
-      }
-
-      if (componentResult.data) {
-        setComponents((current) => {
-          const existingIds = new Set(current.map((component) => component.id));
-          const updated = current.map((component) => {
-            const row = componentResult.data.find((item) => item.id === component.id);
-            if (!row || (component.lastReadingAt && row.last_read_at && component.lastReadingAt > row.last_read_at)) return component;
-            return {
-              ...component,
-              locomotiveId: row.locomotive_id,
-              type: row.component_type,
-              rfid: row.rfid_tag,
-              protheusCode: row.protheus_code,
-              installedKm: Number(row.installed_at_km),
-              kmSinceInstall: Number(row.wear_km),
-              maxLife: Number(row.life_km),
-              remainingLife: Number(row.remaining_life_pct),
-              consumedPercent: 100 - Number(row.remaining_life_pct),
-              status: row.status,
-              lastReadingAt: row.last_read_at,
-              lastRead: row.last_read_at ? new Date(row.last_read_at).toLocaleString("pt-BR") : component.lastRead
-            };
-          });
-          const added = componentResult.data
-            .filter((row) => !existingIds.has(row.id))
-            .map((row) => ({
-              id: row.id,
-              locomotiveId: row.locomotive_id,
-              name: row.name,
-              type: row.component_type,
-              rfid: row.rfid_tag,
-              protheusCode: row.protheus_code,
-              installedKm: Number(row.installed_at_km),
-              kmSinceInstall: Number(row.wear_km),
-              maxLife: Number(row.life_km),
-              remainingLife: Number(row.remaining_life_pct),
-              consumedPercent: 100 - Number(row.remaining_life_pct),
-              status: row.status,
-              lastReadingAt: row.last_read_at,
-              lastRead: row.last_read_at ? new Date(row.last_read_at).toLocaleString("pt-BR") : "—"
-            }));
-          return [...updated, ...added];
-        });
       }
 
       if (eventResult.data?.length) {
@@ -425,36 +380,77 @@ export default function Dashboard() {
     loadRfidSnapshot().catch((error) => {
       if (isActive) console.error("Falha ao sincronizar snapshot RFID:", error);
     });
+    const pollingTimer = window.setInterval(() => {
+      loadRfidSnapshot().catch((error) => {
+        if (isActive) console.error("Falha no polling Supabase dos dados RFID:", error);
+      });
+    }, 3000);
     return () => {
       isActive = false;
+      window.clearInterval(pollingTimer);
     };
-  }, [selectedLocoId]);
+  }, [selectedLocoId, currentLoco.supabaseId]);
+
+  useEffect(() => {
+    if (!supabase) return undefined;
+
+    let isActive = true;
+    const fetchComponents = async () => {
+      const { data, error } = await supabase.from("components").select("*");
+      if (!isActive) return;
+      if (error) {
+        console.error("Erro ao buscar componentes no Supabase:", error);
+        return;
+      }
+      setComponents(data || []);
+    };
+
+    fetchComponents().catch((error) => console.error("Falha ao buscar componentes:", error));
+    const pollingTimer = window.setInterval(() => {
+      fetchComponents().catch((error) => console.error("Falha no polling de componentes:", error));
+    }, 2000);
+
+    return () => {
+      isActive = false;
+      window.clearInterval(pollingTimer);
+    };
+  }, []);
 
   const handleStatusChange = (id, newStatus) => {
     setOrders(orders.map((o) => (o.id === id ? { ...o, status: newStatus } : o)));
   };
 
-  const handleVincularComponente = () => {
+  const handleVincularComponente = async () => {
     if (!newCompData.rfid) {
       alert("Por favor, preencha a Tag RFID!");
       return;
     }
-    const newComp = {
-      id: `comp-${Date.now()}`,
-      locomotiveId: currentLoco.id,
+
+    if (!supabase) {
+      alert("Supabase não está configurado. O componente não foi cadastrado.");
+      return;
+    }
+
+    const { data: newComp, error } = await supabase.from("components").insert({
+      locomotive_id: currentLoco.supabaseId || currentLoco.id,
       name: newCompData.name,
       type: newCompData.type,
-      rfid: newCompData.rfid,
-      protheusCode: newCompData.protheusCode || "NE1400000",
-      installedKm: Number(newCompData.installedKm),
-      kmSinceInstall: 0,
-      maxLife: Number(newCompData.maxLife),
-      remainingLife: 100.0,
-      consumedPercent: 0.0,
-      status: "Normal",
-      lastRead: "Agora mesmo"
-    };
-    setComponents([...components, newComp]);
+      rfid_tag: newCompData.rfid.trim().toUpperCase(),
+      protheus_code: newCompData.protheusCode || "NE1400000",
+      installed_at_km: Number(newCompData.installedKm),
+      wear_km: 0,
+      life_km: Number(newCompData.maxLife),
+      active: true,
+      installed_date: new Date().toISOString()
+    }).select("*").single();
+
+    if (error) {
+      console.error("Erro ao cadastrar componente no Supabase:", error);
+      alert(`Não foi possível cadastrar o componente: ${error.message}`);
+      return;
+    }
+
+    setComponents((current) => [...current, newComp]);
     setShowVincularModal(false);
     setNewCompData({
       type: "Governador de Potência",
@@ -996,11 +992,11 @@ export default function Dashboard() {
                     </thead>
                     <tbody className="divide-y divide-slate-800/60 font-medium">
                       {currentComponents.map((c) => (
-                        <tr key={c.id} className="hover:bg-slate-800/30 transition">
+                        <tr key={c.id || c.uic_tag} className={`transition ${updatedComponentId === (c.id || c.uic_tag) ? "animate-pulse bg-emerald-500/10" : "hover:bg-slate-800/30"}`}>
                           <td className="p-4 font-bold text-white text-base">{c.name}</td>
                           <td className="p-4 font-mono text-emerald-400 font-bold">{c.rfid}</td>
                           <td className="p-4 font-mono text-slate-300">{c.protheusCode}</td>
-                          <td className="p-4 font-bold text-slate-100">{c.kmSinceInstall.toLocaleString("pt-BR")} km</td>
+                          <td className="p-4 font-bold text-slate-100">{Number(c.wear_km || c.km_instalacao || 0).toLocaleString("pt-BR")} km</td>
                           <td className="p-4">
                             <span className="font-extrabold text-slate-200 text-base">{c.remainingLife}%</span>
                           </td>

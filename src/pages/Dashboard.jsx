@@ -75,6 +75,10 @@ const componentStatusClasses = {
 };
 
 const getComponentWearKm = (component) => Number(component.km_since_install ?? component.wear_km ?? 0);
+const getLocomotiveOdometer = (locomotive) => {
+  const odometer = Number(locomotive.odometer_km ?? locomotive.odometer ?? 0);
+  return Number.isFinite(odometer) ? odometer : 0;
+};
 
 const mapComponentForDisplay = (row, displayLocomotiveId = row.locomotive_id) => {
   const wearKm = getComponentWearKm(row);
@@ -149,6 +153,14 @@ export default function Dashboard() {
   const attentionCount = currentComponents.filter((component) => component.status === "Atenção programada").length;
   const criticalCount = currentComponents.filter((component) => component.status === "Intervenção crítica").length;
   const normalCount = currentComponents.length - attentionCount - criticalCount;
+  const componentOdometerTotal = currentComponents.reduce((total, component) => {
+    const km = Number(component.kmSinceInstall || component.km_since_install || component.wear_km || 0);
+    return total + (Number.isNaN(km) ? 0 : km);
+  }, 0);
+  const locomotiveOdometer = Number(currentLoco.odometer);
+  const totalOdometer = Number.isFinite(locomotiveOdometer)
+    ? locomotiveOdometer
+    : getLocomotiveOdometer(currentLoco) || componentOdometerTotal;
 
   // Estados do Relatório (Envio Manual e Programado)
   const [reportEmail, setReportEmail] = useState("");
@@ -256,7 +268,7 @@ export default function Dashboard() {
             ? {
                 ...locomotive,
                 supabaseId: row.id,
-                odometer: Number(row.odometer_km),
+                odometer: getLocomotiveOdometer(row),
                 avgDailyKm: Number(row.avg_daily_km),
                 lastReadingAt: row.last_reading_at,
                 lastRead: "agora mesmo"
@@ -264,7 +276,7 @@ export default function Dashboard() {
             : locomotive
         )));
         if (String(row.id) === String(selectedLocoDbId) || String(row.code) === String(selectedLocoId)) {
-          setOdometerInput(String(row.odometer_km));
+          setOdometerInput(String(getLocomotiveOdometer(row)));
         }
       })
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "components" }, ({ new: row }) => applyComponentChange(row))
@@ -331,7 +343,7 @@ export default function Dashboard() {
             return {
               ...locomotive,
               supabaseId: row.id,
-              odometer: Number(row.odometer_km),
+              odometer: getLocomotiveOdometer(row),
               avgDailyKm: Number(row.avg_daily_km),
               lastReadingAt: row.last_reading_at,
               lastRead: row.last_reading_at ? new Date(row.last_reading_at).toLocaleString("pt-BR") : locomotive.lastRead
@@ -346,7 +358,7 @@ export default function Dashboard() {
               name: row.name || `Locomotiva ${row.code || row.id}`,
               model: row.model,
               yard: row.yard,
-              odometer: Number(row.odometer_km),
+              odometer: getLocomotiveOdometer(row),
               avgDailyKm: Number(row.avg_daily_km),
               lastReadingAt: row.last_reading_at,
               lastRead: row.last_reading_at ? new Date(row.last_reading_at).toLocaleString("pt-BR") : "—",
@@ -356,7 +368,7 @@ export default function Dashboard() {
         });
 
         const selectedRow = selectedDbLoco;
-        if (selectedRow) setOdometerInput(String(selectedRow.odometer_km));
+        if (selectedRow) setOdometerInput(String(getLocomotiveOdometer(selectedRow)));
       }
 
       if (eventResult.data?.length) {
@@ -920,7 +932,7 @@ export default function Dashboard() {
           <div className="text-right bg-slate-900/90 border border-slate-800 px-6 py-3 rounded-2xl">
             <p className="text-xs font-extrabold uppercase tracking-wider text-slate-400">Odômetro Total</p>
             <p className="text-3xl font-black text-white tracking-tight mt-0.5">
-              {currentLoco.odometer.toLocaleString("pt-BR")}{" "}
+              {Number(totalOdometer || currentLoco?.odometer || currentLoco?.odometer_km || 0).toLocaleString("pt-BR")} {" "}
               <span className="text-sm font-bold text-slate-400">km</span>
             </p>
             <p className="text-xs text-slate-400 mt-0.5">FSV padrão: 1x • Média {Math.round(currentLoco.avgDailyKm || 0).toLocaleString("pt-BR")} km/dia</p>
